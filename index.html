@@ -215,7 +215,7 @@ const st = {
   user: null,
   tab: "home",
   data: { members:{}, memories:[], timeline:[], jokes:[], votes:{}, quiz:[], scores:{Dagi:0,Sosi:0,Hassu:0}, activity:[], meta:{}, groupPhoto:null, describe:[] },
-  ui: { lightbox:null, modal:null }
+  ui: { lightbox:null, modal:null, confirm:null, pendingIdPhoto:null, pendingGroupPhoto:null }
 };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -250,7 +250,7 @@ async function sDelete(key){
   try{ await window.storage.delete(key, true); return true; }
   catch(e){ console.error("storage delete failed", key, e); return false; }
 }
-function confirmDelete(label){ return confirm(`Delete ${label}? This can't be undone.`); }
+function requestDelete(label, onYes){ st.ui.confirm = {label, onYes}; render(); }
 
 async function logActivity(text){
   const id = uid();
@@ -386,7 +386,7 @@ function render(){
   updateBgFx();
   const root = document.getElementById('root');
   if(!st.user){ root.innerHTML = renderIdentityScreen(); attachIdentityEvents(); return; }
-  root.innerHTML = renderTopbar() + '<div id="app">' + renderTab() + '</div>' + renderFab() + renderModal() + renderLightbox();
+  root.innerHTML = renderTopbar() + '<div id="app">' + renderTab() + '</div>' + renderFab() + renderModal() + renderLightbox() + renderConfirm();
   attachGlobalEvents();
 }
 
@@ -398,7 +398,8 @@ function renderIdentityScreen(){
     <p class="sub" style="margin:10px auto 24px;">Pick your name to enter the ድግስ Family home. Add a picture of yourself while you're at it.</p>
     <div class="id-row">
       ${MEMBERS.map(m=>{
-        const photo = (st.data.members[m]||{}).photo;
+        const pending = st.ui.pendingIdPhoto && st.ui.pendingIdPhoto.member===m ? st.ui.pendingIdPhoto.dataUrl : null;
+        const photo = pending || (st.data.members[m]||{}).photo;
         return `
         <div class="id-card">
           <div class="id-avatar-wrap">
@@ -407,7 +408,13 @@ function renderIdentityScreen(){
             <input type="file" accept="image/*" id="idPhoto-${m}" data-id-photo="${m}" style="display:none;">
           </div>
           <button class="id-btn" data-user="${m}">${m}</button>
-          <div class="id-photo-hint">${photo ? 'tap to change photo' : 'add a photo'}</div>
+          ${pending
+            ? `<div class="id-photo-hint" style="color:var(--gold);">unsaved photo</div>
+               <div style="display:flex;gap:6px;margin-top:8px;">
+                 <button class="btn small" data-cancel-id-photo="${m}">Cancel</button>
+                 <button class="btn primary small" data-save-id-photo="${m}">Save photo</button>
+               </div>`
+            : `<div class="id-photo-hint">${photo ? 'tap to change photo' : 'add a photo'}</div>`}
         </div>`;
       }).join('')}
     </div>
@@ -416,19 +423,32 @@ function renderIdentityScreen(){
 }
 function attachIdentityEvents(){
   document.querySelectorAll('.id-btn').forEach(b=>{
-    b.onclick = async ()=>{ st.user = b.dataset.user; await loadAll(); render(); startPolling(); };
+    b.onclick = async ()=>{ st.user = b.dataset.user; st.ui.pendingIdPhoto=null; await loadAll(); render(); startPolling(); };
   });
   document.querySelectorAll('[data-id-photo]').forEach(input=>{
     input.onchange = async (e)=>{
       const m = input.dataset.idPhoto;
       const f = e.target.files[0]; if(!f) return;
       const photo = await compressImage(f, 400, 0.75);
+      st.ui.pendingIdPhoto = {member:m, dataUrl:photo};
+      render();
+    };
+  });
+  document.querySelectorAll('[data-save-id-photo]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const m = btn.dataset.saveIdPhoto;
+      if(!st.ui.pendingIdPhoto || st.ui.pendingIdPhoto.member!==m) return;
+      const photo = st.ui.pendingIdPhoto.dataUrl;
       const existing = st.data.members[m] || {bio:"",facts:"",favorites:"",photo:null};
       existing.photo = photo;
       st.data.members[m] = existing;
       await sSet('member:'+m, existing);
+      st.ui.pendingIdPhoto = null;
       render();
     };
+  });
+  document.querySelectorAll('[data-cancel-id-photo]').forEach(btn=>{
+    btn.onclick = ()=>{ st.ui.pendingIdPhoto = null; render(); };
   });
 }
 
@@ -467,9 +487,23 @@ function renderHome(){
     <div class="hero-names">DAGI &nbsp;•&nbsp; SOSI &nbsp;•&nbsp; HASSU</div>
     <h1>The <span class="amh">ድግስ</span> Family</h1>
     <div class="hero-tag">Three friends. One family. A lifetime of memories.</div>
-    ${st.data.groupPhoto
-      ? `<img class="hero-photo" src="${st.data.groupPhoto}">`
-      : `<div class="hero-photo-empty" id="groupPhotoPick">Tap to add your main group photo<input type="file" accept="image/*" id="groupPhotoInput" style="display:none;"></div>`}
+    ${(() => {
+      const pending = st.ui.pendingGroupPhoto;
+      const photo = pending || st.data.groupPhoto;
+      return `
+      ${photo
+        ? `<img class="hero-photo" src="${photo}" id="groupPhotoPick" style="cursor:pointer;">`
+        : `<div class="hero-photo-empty" id="groupPhotoPick">Tap to add your main group photo</div>`}
+      <input type="file" accept="image/*" id="groupPhotoInput" style="display:none;">
+      ${pending
+        ? `<div style="display:flex;gap:8px;justify-content:center;margin:-14px 0 26px;">
+             <span style="color:var(--gold);font-size:12px;align-self:center;">unsaved photo</span>
+             <button class="btn small" id="cancelGroupPhoto">Cancel</button>
+             <button class="btn primary small" id="saveGroupPhoto">Save photo</button>
+           </div>`
+        : (photo ? `<div style="text-align:center;color:var(--muted-2);font-size:11.5px;margin:-14px 0 26px;">tap photo to change</div>` : '')}
+      `;
+    })()}
     <div class="counter-row">
       <div class="counter-chip"><div class="counter-num">${years}</div><div class="counter-label">Years</div></div>
       <div class="counter-chip"><div class="counter-num">${months}</div><div class="counter-label">Months</div></div>
@@ -743,6 +777,14 @@ function renderModal(){
   if(type==='editDate') content = editDateModalContent();
   return `<div class="modal-backdrop" id="modalBackdrop"><div class="modal">${content}</div></div>`;
 }
+function renderConfirm(){
+  if(!st.ui.confirm) return "";
+  return `<div class="modal-backdrop" id="confirmBackdrop"><div class="modal" style="max-width:340px;">
+    <h3>Delete ${esc(st.ui.confirm.label)}?</h3>
+    <p class="sub" style="margin:0 0 4px;">This can't be undone.</p>
+    <div class="modal-actions"><button class="btn" id="confirmNo">Cancel</button><button class="btn primary" style="background:var(--red-hi);border-color:var(--red-hi);" id="confirmYes">Delete</button></div>
+  </div></div>`;
+}
 
 function memoryModalContent(){
   return `
@@ -842,6 +884,15 @@ function attachGlobalEvents(){
   const backdrop = document.getElementById('modalBackdrop');
   if(backdrop) backdrop.onclick = (e)=>{ if(e.target===backdrop){ st.ui.modal=null; render(); } };
 
+  const confirmBackdrop = document.getElementById('confirmBackdrop');
+  if(confirmBackdrop){
+    confirmBackdrop.onclick = (e)=>{ if(e.target===confirmBackdrop){ st.ui.confirm=null; render(); } };
+    const yes = document.getElementById('confirmYes');
+    const no = document.getElementById('confirmNo');
+    if(no) no.onclick = ()=>{ st.ui.confirm=null; render(); };
+    if(yes) yes.onclick = ()=>{ const onYes = st.ui.confirm && st.ui.confirm.onYes; st.ui.confirm=null; if(onYes) onYes(); };
+  }
+
   const memPick = document.getElementById('memPhotoPick');
   if(memPick){
     memPick.onclick = ()=> document.getElementById('memPhotoInput').click();
@@ -881,11 +932,25 @@ function attachGlobalEvents(){
     document.getElementById('groupPhotoInput').onchange = async (e)=>{
       const f = e.target.files[0]; if(!f) return;
       const photo = await compressImage(f, 1000, 0.75);
+      st.ui.pendingGroupPhoto = photo;
+      render();
+    };
+  }
+  const saveGroupBtn = document.getElementById('saveGroupPhoto');
+  if(saveGroupBtn){
+    saveGroupBtn.onclick = async ()=>{
+      const photo = st.ui.pendingGroupPhoto;
+      if(!photo) return;
       await sSet('meta:groupPhoto', photo);
       st.data.groupPhoto = photo;
+      st.ui.pendingGroupPhoto = null;
       await logActivity(`📸 ${st.user} set the main group photo`);
       render();
     };
+  }
+  const cancelGroupBtn = document.getElementById('cancelGroupPhoto');
+  if(cancelGroupBtn){
+    cancelGroupBtn.onclick = ()=>{ st.ui.pendingGroupPhoto = null; render(); };
   }
 
   document.querySelectorAll('[data-answer-quiz]').forEach(el=>{ el.onclick = ()=> submitQuizAnswer(el.dataset.answerQuiz, el.dataset.answerText); });
@@ -901,44 +966,44 @@ function attachGlobalEvents(){
   document.querySelectorAll('[data-delete-quiz]').forEach(el=>{ el.onclick = ()=> deleteQuiz(el.dataset.deleteQuiz); });
 }
 
-async function deleteMemory(id){
-  if(!confirmDelete('this memory')) return;
+function deleteMemory(id){ requestDelete('this memory', ()=>doDeleteMemory(id)); }
+async function doDeleteMemory(id){
   await sDelete('memory:'+id);
   st.data.memories = st.data.memories.filter(m=>m.id!==id);
   if(st.ui.lightbox===id) st.ui.lightbox=null;
   await logActivity(`🗑️ ${st.user} deleted a memory`);
   render();
 }
-async function deleteTimeline(id){
-  if(!confirmDelete('this chapter')) return;
+function deleteTimeline(id){ requestDelete('this chapter', ()=>doDeleteTimeline(id)); }
+async function doDeleteTimeline(id){
   await sDelete('timeline:'+id);
   st.data.timeline = st.data.timeline.filter(t=>t.id!==id);
   await logActivity(`🗑️ ${st.user} removed a chapter from the story`);
   render();
 }
-async function deleteJoke(id){
-  if(!confirmDelete('this joke')) return;
+function deleteJoke(id){ requestDelete('this joke', ()=>doDeleteJoke(id)); }
+async function doDeleteJoke(id){
   await sDelete('joke:'+id);
   st.data.jokes = st.data.jokes.filter(j=>j.id!==id);
   await logActivity(`🗑️ ${st.user} deleted an inside joke`);
   render();
 }
-async function deleteDescribe(subject, author){
-  if(!confirmDelete('this entry')) return;
+function deleteDescribe(subject, author){ requestDelete('this entry', ()=>doDeleteDescribe(subject, author)); }
+async function doDeleteDescribe(subject, author){
   await sDelete('describe:'+subject+':'+author);
   st.data.describe = st.data.describe.filter(d=>!(d.subject===subject && d.author===author));
   await logActivity(`🗑️ ${st.user} deleted what they wrote about ${subject}`);
   render();
 }
-async function deleteAward(name){
-  if(!confirmDelete('this award')) return;
+function deleteAward(name){ requestDelete('this award', ()=>doDeleteAward(name)); }
+async function doDeleteAward(name){
   await sDelete('votes:'+new Date().getFullYear()+':'+slug(name));
   if(st.data.votes) delete st.data.votes[name];
   await logActivity(`🗑️ ${st.user} deleted the award "${name}"`);
   render();
 }
-async function deleteQuiz(id){
-  if(!confirmDelete('this question')) return;
+function deleteQuiz(id){ requestDelete('this question', ()=>doDeleteQuiz(id)); }
+async function doDeleteQuiz(id){
   await sDelete('quiz:'+id);
   st.data.quiz = st.data.quiz.filter(q=>q.id!==id);
   await logActivity(`🗑️ ${st.user} deleted a question`);
